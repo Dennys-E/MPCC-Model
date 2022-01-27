@@ -22,21 +22,20 @@ gcc -o myprogram myprogram.o ascii.o repwvl_thermal.o -l netcdf -lm
 #define KAPPA 2.0 / 7.0  // (cp-cv)/cp
 #define P0 1000.0        // hPa or mbar
 #define SIMTIME 3.1536e7 // simulation time in seconds (1 year = 3.1536e7)
-#define G 9.81           // m/s^2
+#define G 9.8065           // m/s^2
 #define CP 1004.0        // heat capacity J/(kg*K)
 #define NLAY 20
 #define SIGMA 5.6701e-8 // W/(m^2 K^4)
 #define NMU 20
 #define TCONSTANT 288.0     // K
 #define EABS 238.0          // W/m^2
-#define H 6.62607015e-34    // Planck constant (J/Hz)
-#define C 299792458.0       // speed of light
-#define KB 1.3806485279e-23 // Boltzmann constant (J/K)
-#define NWVL 100001         // Number of wavelengths
+#define H_P 6.62607015e-34    // Planck constant (J/Hz)
+#define C_LIGHT 299792458.0       // speed of light
+#define K_B 1.3806485279e-23 // Boltzmann constant (J/K)
 
 // prototypes
-int integrate_radiation(double *T, double dp, double dt, double **tauCO2, double *wvl, double *dwvl, int nwvl);
-int radiative_transfer(double *T, double *Eintup, double *Eintdown, int nlev, int nwvl, double *wvl, double *dwvl, double **tauCO2);
+int integrate_radiation(double *T, double dp, double dt, double **tauCO2, double *wvl, double *weight, int nwvl);
+int radiative_transfer(double *T, double *Eupthermal, double *Edownthermal, int nlev, int nwvl, double *wvl, double *weight, double **tauCO2);
 int schwarzschild(double *T, double *B, double *tau_abs, double *Eup, double *Edown, int nlev);
 int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double dt);
 int convection(double *T, double *p);
@@ -46,7 +45,7 @@ double ThetatoT(double Theta, double p);
 double maximum(double *array, int len, double lower_bound);
 int show(const void *v);
 void initialize_double_array(double *array, size_t length, double value);
-double Planckfunction(double T, double w);
+double Planck(double T, double w);
 void write_file(char fname[], int len, double *p, double *var);
 void write_Tsurface(double time, double Tsurface);
 int memalloc2D(double **matrix, int nrows, int ncols);
@@ -60,12 +59,12 @@ int main()
 
     // Creating a file to output surface T into
     FILE *fptr;
-    fptr = fopen("output_surfaceT_lblcombined.dat", "w");
+    fptr = fopen("output_surfaceT_reduced_thermal.dat", "w");
     fprintf(fptr, "time \t \t \t T_surf \n");
 
     // Allocation and initialization
     /*
-    double T[NLAY] = {166.0, 177.0, 180.0, 182.0, 188.0, 199.0, 208.0, 217.0, 225.0, 232.0, 238.0, 244.0, 250.0,         255.0, 260.0, 265.0, 270.0, 274.0, 278.0, 283.0}; */
+    double T[NLAY] = {166.0, 177.0, 180.0, 182.0, 188.0, 199.0, 208.0, 217.0, 225.0, 232.0, 238.0, 244.0, 250.0, 255.0, 260.0, 265.0, 270.0, 274.0, 278.0, 283.0}; */
     
     double T[NLAY];
     for(int i=0; i<NLAY; i++)
@@ -79,7 +78,6 @@ int main()
     }
     
     int nwvl = 0;
-    int nlay = 0;
     
     // Initialize wavelength array
     double *wvl = NULL;
@@ -107,7 +105,7 @@ int main()
     
     // test.atm contains data atmospheric state
     char testfile[FILENAME_MAX] = "./test.atm";
-    status = read_9c_file(testfile, &zdata, &pdata, &Tdata, &rhodata, &H2O_VMR, &O3_VMR, &CO2_VMR, &CH4_VMR, &N2O_VMR,                                          &nlev);
+    status = read_9c_file(testfile, &zdata, &pdata, &Tdata, &rhodata, &H2O_VMR, &O3_VMR, &CO2_VMR, &CH4_VMR, &N2O_VMR, &nlev);
     if (status!=0) {
       fprintf (stderr, "Error %d reading %s\n", status, "test.atm");
       return status;
@@ -145,27 +143,8 @@ int main()
 
     // determine optical thickness from quantities at levels
     // option: 50 or 100 significant wavelengths, both are saved in lookup files
-    read_tau ("./ReducedLookupFile_thermal_50wvls_corrected.nc", nlev, plevPa, Tdata, H2O_VMR, CO2_VMR, O3_VMR,                 N2O_VMR,CO_VMR, CH4_VMR, O2_VMR, HNO3_VMR, N2_VMR, &tau, &wvl, &weight, &nwvl, 1);
+    read_tau ("./ReducedLookupFile_thermal_50wvls_corrected.nc", nlev, plevPa, Tdata, H2O_VMR, CO2_VMR, O3_VMR, N2O_VMR,CO_VMR, CH4_VMR, O2_VMR, HNO3_VMR, N2_VMR, &tau, &wvl, &weight, &nwvl, 1);
     
-    
-    double dwvl[nwvl];
-    for (int w = 0; w < nwvl; w++)
-    {
-        // Calculate the delta in wavelengths (dwvl) for later use
-        if (w == 0)
-        {
-            dwvl[w] = (wvl[1] - wvl[0]) * 1e-9;
-        }
-        else if (w == nwvl - 1)
-        {
-            dwvl[w] = (wvl[nwvl - 1] - wvl[nwvl - 2]) * 1e-9;
-        }
-        else
-        {
-            dwvl[w] = (wvl[w + 1] - wvl[w - 1]) * 1e-9 / 2.0;
-        }
-    }
-
     double absdT[NLAY];
     double absdT_max = 0;
     double dT_limit = 10;   // K
@@ -188,7 +167,7 @@ int main()
 
         // Radiation
         // Note that tau[][] ans nwvl are the quantities already passed and computed by the repwvl approach
-        integrate_radiation(T, dp, dt, tau, wvl, dwvl, nwvl);
+        integrate_radiation(T, dp, dt, tau, wvl, weight, nwvl);
 
         // Convection
         convection(T, p);
@@ -231,7 +210,7 @@ int main()
 
     // Write file with the final layer-temperature structure
     FILE *fptr2;
-    fptr2 = fopen("output_Tstructure_lblcombined.dat", "w");
+    fptr2 = fopen("output_Tstructure_reduced_thermal.dat", "w");
     fprintf(fptr2, "Final time = %5.0f hours, T (R) in different layers (L):\n", t / 3600);
     for (int i = 0; i < NLAY; i++)
     {
@@ -250,7 +229,7 @@ int main()
     return 0;
 }
 
-int integrate_radiation(double *T, double dp, double dt, double **tau, double *wvl, double *dwvl, int nwvl)
+int integrate_radiation(double *T, double dp, double dt, double **tau, double *wvl, double *weight, int nwvl)
 {
     // Function including radiative integration over wavelength for different molecules and different layers
     // Uses molecule file data for the tau array, as computed by repwvl
@@ -265,18 +244,18 @@ int integrate_radiation(double *T, double dp, double dt, double **tau, double *w
     initialize_double_array(Euptot, nlev, 0);
 
     // Produce irradiances with the input temperature profile
-    radiative_transfer(T, Euptot, Edowntot, nlev, nwvl, wvl, dwvl, tau);
+    radiative_transfer(T, Euptot, Edowntot, nlev, nwvl, wvl, weight, tau);
 
     // New temperature array from irradiances
     irradiancetoT(Edowntot, Euptot, T, dp, dt);
     return 0;
 }
 
-int radiative_transfer(double *T, double *Eintup, double *Eintdown, int nlev, int nwvl, double *wvl, double *dwvl, double **tau)
+int radiative_transfer(double *T, double *Eupthermal, double *Edownthermal, int nlev, int nwvl, double *wvl, double *weight, double **tau)
 {
     // Integration over wavelengths with Eup and Edown
     // I: T array, wavelength array
-    // O: Eintup array, Eintdown array
+    // O: Eupthermal array, Edownthermal array
 
     double B[NLAY], tau_abs[NLAY];
     double Eup[nlev], Edown[nlev]; // W/m^2
@@ -291,7 +270,7 @@ int radiative_transfer(double *T, double *Eintup, double *Eintdown, int nlev, in
         {
             tau_abs[i] = tau[w][i];
             // Compute Planck function depending on the wavelength band (=^= sigma*T^4 and cplkavg function)
-            B[i] = Planckfunction(T[i], wvl[w]) * dwvl[w];
+            B[i] = Planck(T[i], wvl[w]) * weight[w];
         }
 
         // Compute irradiance from the temperature profile
@@ -300,8 +279,8 @@ int radiative_transfer(double *T, double *Eintup, double *Eintdown, int nlev, in
         // Integrate over different wavelength contributions
         for (int i = 0; i < nlev; i++)
         {
-            Eintup[i] += Eup[i];
-            Eintdown[i] += Edown[i];
+            Eupthermal[i] += Eup[i];
+            Edownthermal[i] += Edown[i];
         }
     }
     return 0;
@@ -456,14 +435,13 @@ void initialize_double_array(double *array, size_t length, double value)
     }
 }
 
-double Planckfunction(double T, double w) // T in K, w in nm
+double Planck(double T, double w) // T in K, w in nm
 {
     // Function that computes the Planck contribution for a wavelength and temperature input.
     // Replaces both SIGMA*pow(T, 4) and cplkavg function
 
-    double wvlmeter = w * 1e-9;
-    double res = ((2.0 * H * C * C) / (wvlmeter * wvlmeter * wvlmeter * wvlmeter * wvlmeter)) * 1 / (exp((H * C) / (wvlmeter * KB * T)) - 1.0);
-    return res;
+    w *= 1e-9;
+    return (2.0 * H_P * C_LIGHT * C_LIGHT) / (w * w * w * w * w) / (exp((H_P * C_LIGHT) / (w * K_B * T)) - 1.0)/1.0e9; // W/(m2 nm sterad)
 }
 
 void write_file(char fname[], int len, double *p, double *var)
