@@ -74,8 +74,8 @@ int main()
     
     int status = 0, nlev = 0, nwvl_thermal = 0, nwvl_solar = 0;  
     double **tau_thermal = NULL, **tau_solar;
-    double *wvl_thermal = NULL, *weight_thermal = NULL, *wvl_solar=NULL, *weight_solar = NULL, *E0_solar = NULL;
-    double *zlev = NULL, *plev = NULL, *Tlev = NULL, *rhodata = NULL, *plevPa = NULL, *Tlay = NULL, *rholev = NULL;
+    double *wvl_thermal = NULL, *weight_thermal = NULL, *wvl_solar=NULL, *weight_solar = NULL,     *E0_solar = NULL;
+    double *zlev = NULL, *plev = NULL, *Tlev = NULL, *rhodata = NULL, *plevPa = NULL, *Tlay =     NULL, *rholev = NULL;
     double *H2O_VMR = NULL,  *H2O_VMR_lay=NULL;
     double *CO2_VMR=NULL,  *CO2_VMR_lay=NULL;
     double *O3_VMR=NULL,   *O3_VMR_lay=NULL;
@@ -89,7 +89,7 @@ int main()
     
     // Read atmospheric profile from test.atm (defined at levels)
     char testfile[FILENAME_MAX] = "./test.atm";
-    status = read_9c_file(testfile, &zlev, &plev, &Tlev, &rhodata, &H2O_VMR, &O3_VMR, &CO2_VMR, &CH4_VMR, &N2O_VMR, &nlev);
+    status = read_9c_file(testfile, &zlev, &plev, &Tlev, &rhodata, &H2O_VMR, &O3_VMR,             &CO2_VMR, &CH4_VMR, &N2O_VMR, &nlev);
     if (status != 0)
     {
         fprintf (stderr, "Error %d reading %s\n", status, "test.atm");
@@ -97,7 +97,7 @@ int main()
     }
     if (nlev != NLAY + 1)
     {
-        printf("Error: number of layers (nlev) from data does not correspond to set NLAY in model");
+        printf("Error: number of layers (nlev) from data does not correspond to set NLAY in                   model");
     }
     
     
@@ -159,8 +159,8 @@ int main()
     double oldTlay[NLAY], dTlay[NLAY], absdT[NLAY];
     double dT_limit = 10;   // K
     double dt = 1;      // initialization
-    double dt_max = 60*60*48; // maximum time step (6 hours)
-    double dt_min = 60*60*5;
+    double dt_max = 60*60*6; // maximum time step (6 hours)
+    double dt_min = 60*60;
     double t_temp = 0;
     
     fprintf(fptr, "%9.0f \t \t %7.3f \n", t, Tlay[NLAY - 1]); // print initial values
@@ -182,8 +182,6 @@ int main()
               &tau_solar, &wvl_solar, &weight_solar, &E0_solar, &nwvl_solar, 0); // defined at layers
             t_temp = 0;
         }
-        
-
         
         
         // Save each initial temperature array for (real) dT calculation later
@@ -399,81 +397,109 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
 
 int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar)
 {
-        // Function calculating solar irradiance
-        // I: 
-        // O: 
-
-    double mu0 = 0.5; // 60 degree solar zenith angle
+    
+    // Clear the relevant arrays before each use of the function
     double Edir[nlev], Edir_wvl[nlev];
+    for(int i = 0; i <= nlev; i++){
+        Eupsolar[i] = 0.;
+        Edownsolar[i] = 0.;
+        Edir[i] = 0.;
+        Edir_wvl[i] =0.;
+     }
     
+    // Define quantities and tau_Rayleigh[i][w] (even though it does not depend on i --> better compatibility with tau)
+    double tau_Rayleigh[nwvl_solar][NLAY];
+    double sigma_to_tau = dp*100/(M_AIR*U*G);
     
-    // Reset Edir
-    for (int i = 0; i < nlev; i++) 
-        Edir[i] = 0; 
-
-    // Calculate direct solar irradiance
-    for (int w = 0; w < nwvl_solar; w++)   // wavelength loop
-    {
-        Edir_wvl[0] = E0_solar[w] * mu0;
-
-        for (int i = 0; i < nlev-1; i++)
-          Edir_wvl[i+1] = Edir_wvl[i] * exp(-tau_solar[w][i]/mu0);
-
-        // Add irradiances
-        for (int i = 0; i < nlev; i++)
-          Edir[i] += Edir_wvl[i] * weight_solar[w];
-    }
-    
-    // Computation of tau profiles
-    double sigma_Rayleigh, omega0, g;
-    double sigma_to_tau = dp * 100 / (M_AIR * U * G);
-    double **tau_sca_Rayleigh, **tau_ext;
-    double t[NLAY], r[NLAY], rdir[NLAY], sdir[NLAY], tdir[NLAY];
-    double R[NLAY], T[NLAY];
-    double Eup[nlev], Edown[nlev];
-
-    tau_sca_Rayleigh = (double **) calloc(nwvl_solar, sizeof(double*));
-    tau_ext = (double **) calloc(nwvl_solar, sizeof(double*));
-    for(int w = 0; w < nwvl_solar; w++) 
-    {
-        tau_sca_Rayleigh[w] = (double *) calloc(NLAY, sizeof(double));
-        tau_ext[w] = (double *) calloc(NLAY, sizeof(double));
-    }
-    
-    // Calculate diffuse solar irradiance
-    for (int w=0; w < nwvl_solar; w++)
-    {
-        sigma_Rayleigh = 4.84e-27 * (550/wvl_solar[w])*(550/wvl_solar[w])*(550/wvl_solar[w])*(550/wvl_solar[w]);
-        for (int i=0; i < NLAY; i++)
-        {
-            tau_sca_Rayleigh[w][i] = sigma_Rayleigh * sigma_to_tau;
-            tau_ext[w][i] = tau_solar[w][i] + tau_sca_Rayleigh[w][i];
-            omega0 = tau_sca_Rayleigh[w][i] / tau_ext[w][i];
-            g = G_RAYLEIGH; //(dtau_sca_Rayleigh * g_Rayleigh + dtau_sca_cloud * g_cloud) / (dtau_sca_Rayleigh + dtau_sca_cloud)
-            eddington_v2(tau_ext[w][i], g, omega0, mu0, t, r, rdir, sdir, tdir);
+    for(int i = 0; i < NLAY; i++){
+        for(int w = 0; w < nwvl_solar; w++){
+            tau_Rayleigh[i][w] = sigma_to_tau*(4.840E-31 * (550.0/ 
+            wvl_solar[i])*(550.0/wvl_solar[i])*(550.0/wvl_solar[i])*(550.0/wvl_solar[i]));
         }
+    }
+
+    // This is the point to later define omega0 and tau for clouds. For now I leave them set to zero
+    double tau_cloud[nwvl_solar][NLAY];
+    double tau_tot[nwvl_solar][NLAY];
+    double omega0[nwvl_solar][NLAY];
+    
+    for(int i = 0; i < NLAY; i++){
+        for(int w = 0; w < nwvl_solar; w++){
+            tau_tot[w][i] = tau_Rayleigh[w][i]+tau_cloud[w][i]+tau_solar[w][i];
+            omega0[w][i] = tau_Rayleigh[w][i]/tau_solar[w][i]; //here a cloud scattering tau would have to be added in the enumerator
+        }
+    }
+    
+    // In order to compute the eddington function for the adding routine, all necessary layer quantites have to be defined
+    // Since no clouds are introduced yet, g is set to zero.
+    double t[NLAY], r[NLAY], rdir[NLAY], sdir[NLAY], tdir[NLAY];
+    double R[NLAY], T[NLAY], S[NLAY], Sdir[NLAY], Tdir[NLAY];
+    
+    double g = G_RAYLEIGH; //asymetry parameter
+    double mu0 = 0.5; // 60 degree solar zenith angle
+
+    for(int w = 0; w < nwvl_solar; w++){
+        for(int i = 0; i < NLAY; i++){
+            // This loop over wavelengths will be relevant for a wile. E.g. all quantites with the suffix _wvl are relevant for one wavelength and will be added in the end of the loop.
+            eddington_v2 (tau_tot[w][i], g, omega0[w][i], mu0, &t[i],
+                          &r[i], &rdir[i], &sdir[i], &tdir[i]);
+        }
+        
+        // Define boundary conditions and "initial values"
+        Edir_wvl[0] = E0_solar[0]*mu0/2.;
         R[0] = r[0];
-        T[0] = t[0];        
-        for (int i = 0; i < NLAY; i++)
+        T[0] = t[0];
+        Tdir[0] = tdir[0];
+        Sdir[0] = sdir[0];
+        Sdir[1] = (t[1] * sdir[0] + tdir[0] * rdir[1] * r[0] * t[1])/(1 - r[0]*r[1]) + tdir[0] * sdir[1];
+        
+        // Compute R, T and Tdir
+        for (int i = 0; i < NLAY-1; i++)
         {
             R[i+1] = r[i+1] + R[i]*t[i+1]*t[i+1]/(1-R[i]*r[i+1]);
             T[i+1] = T[i]*t[i+1]/(1-R[i]*r[i+1]);
+            Tdir[i+1] = Tdir[i] * tdir[i+1];
         }
-        Edown[0] = E0_solar[w] * mu0;
-        for (int i = nlev-1; i > 0; i--)
-        {
-            Edown[i-1] = (T[i-2]*Edown[0] + R[i-2]*t[i-1]*Eup[i])/(1-R[i-2]*r[i-1]);
-            Eup[i-1] = (t[i-1]*Eup[i] + T[i-2]*r[i-1]*Edown[0])/(1-R[i-2]*r[i-1]);
+        
+        // Using T, compute direct downward irradiance 
+        for (int i = 1; i<nlev; i++){
+        Edir_wvl[i] = Tdir[i-1] * Edir_wvl[0];
         }
+        
+        // Now the remaining compnents of Sdir can be computed
+        for (int i =0; i < NLAY-1; i++){
+            Sdir[i+1] = (t[i+1]*Sdir[i]+Tdir[i]*rdir[i+1]*R[i]*t[i+1])/(1-R[i]*r[i+1])+Tdir[i]*sdir[i+1];
+        }
+        
+        // Define surface albedo Ag and boundary conditions for Eupsolar and Edownsolar in current wavelength
+        double Ag = 0.12;
+        double Edownsolar_wvl[nlev], Eupsolar_wvl[nlev];
+        
+        // Clear _wvl arrays 
+        for (int i=0; i<NLAY-1; i++){
+            Edownsolar_wvl[i]=0.;
+            Eupsolar_wvl[i]=0.;
+        }
+        
+        Edownsolar_wvl[0] = 0.;
+        Edownsolar_wvl[NLAY] = Edir_wvl[0]*(Sdir[NLAY-1]+Tdir[NLAY-1]*R[NLAY-1]*Ag)                                                      /(1-R[NLAY-1]*Ag);
+        Eupsolar_wvl[NLAY] = Ag*(Edownsolar_wvl[NLAY]+Tdir[NLAY-1]*Edir_wvl[0]);
+        
+        // Calculate the remaining components of Eupsolar and Edownsolar in current wavelength, going from bottom to TOA
+        for (int i = NLAY; i>1; i--){
+            Edownsolar_wvl[i-1]=(R[i-2]*t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]+Edir_wvl[i-1]*rdir[i-1]*R[i-2])                                     /(1-R[i-2]*r[i-1]);
+            Eupsolar_wvl[i-1]=(t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]*r[i-1]+Edir_wvl[i-1]*rdir[i-1])                                               /(1-R[i-2]*r[i-1]);
+        }
+        Eupsolar_wvl[0] = t[0]*Eupsolar_wvl[1]; //technically + r[0]*Edownsolar_wvl[0] but second term is set to zero
+        
+        // Adding up _wvl contributions to the returned irradiances
+        for (int i=0; i<=NLAY; i++){
+            Edir[i] += Edir_wvl[i]*weight_solar[w];
+            Eupsolar[i] += Eupsolar_wvl[i]*weight_solar[w];
+            Edownsolar[i] += Edownsolar_wvl[i]*weight_solar[w];
+        }
+        return 0;
     }
-    
-    // Combine direct and diffuse solar irradiance
-    for (int i = 0; i < nlev; i++)
-    {
-        Edownsolar[i] = Edir[i] + Edown[i];
-        Eupsolar[i] = Eup[i];
-    }
-    return 0;
 }
 
 int convection(double *T, double *p)
