@@ -228,8 +228,9 @@ int main()
 
         // Print progress in current timestep
         progress = 100. * (t / SIMTIME);
+        /*
         printf("Running the time loop... %3.2f  |  dt = %3.2f seconds  |  t = %3.2f days  |  Tsurface = %3.2f K \r", progress, dt, t / 86400, Tlay[NLAY - 1]);
-        fflush(stdout);
+        fflush(stdout); */
     }
     fclose(fptr);
 
@@ -397,10 +398,11 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
 
 int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar)
 {
+    double E0_temp = 0.;
     
     // Clear the relevant arrays before each use of the function
     double Edir[nlev], Edir_wvl[nlev];
-    for(int i = 0; i <= nlev; i++){
+    for(int i = 0; i < nlev; i++){
         Eupsolar[i] = 0.;
         Edownsolar[i] = 0.;
         Edir[i] = 0.;
@@ -413,8 +415,9 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
     
     for(int i = 0; i < NLAY; i++){
         for(int w = 0; w < nwvl_solar; w++){
-            tau_Rayleigh[i][w] = sigma_to_tau*(4.840E-31 * (550.0/ 
-            wvl_solar[i])*(550.0/wvl_solar[i])*(550.0/wvl_solar[i])*(550.0/wvl_solar[i]));
+            tau_Rayleigh[w][i] = sigma_to_tau*(4.840E-31 * (550.0/ 
+            wvl_solar[w])*(550.0/wvl_solar[w])*(550.0/wvl_solar[w])*(550.0/wvl_solar[w]));
+            //printf(%8.2f %8.2f, wvl_solar[w], tau_Rayleigh)
         }
     }
 
@@ -446,7 +449,9 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         }
         
         // Define boundary conditions and "initial values"
-        Edir_wvl[0] = E0_solar[0]*mu0/2.;
+        Edir_wvl[0] = E0_solar[w]*mu0/2.;
+        E0_temp += E0_solar[w]*weight_solar[w];
+        //printf("E0[w]: %8.2f \n", E0_solar[w]);
         R[0] = r[0];
         T[0] = t[0];
         Tdir[0] = tdir[0];
@@ -466,7 +471,7 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         Edir_wvl[i] = Tdir[i-1] * Edir_wvl[0];
         }
         
-        // Now the remaining compnents of Sdir can be computed
+        // Now the remaining components of Sdir can be computed
         for (int i =0; i < NLAY-1; i++){
             Sdir[i+1] = (t[i+1]*Sdir[i]+Tdir[i]*rdir[i+1]*R[i]*t[i+1])/(1-R[i]*r[i+1])+Tdir[i]*sdir[i+1];
         }
@@ -476,10 +481,12 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         double Edownsolar_wvl[nlev], Eupsolar_wvl[nlev];
         
         // Clear _wvl arrays 
+        /*
         for (int i=0; i<NLAY-1; i++){
             Edownsolar_wvl[i]=0.;
             Eupsolar_wvl[i]=0.;
         }
+        */
         
         Edownsolar_wvl[0] = 0.;
         Edownsolar_wvl[NLAY] = Edir_wvl[0]*(Sdir[NLAY-1]+Tdir[NLAY-1]*R[NLAY-1]*Ag)                                                      /(1-R[NLAY-1]*Ag);
@@ -487,19 +494,31 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         
         // Calculate the remaining components of Eupsolar and Edownsolar in current wavelength, going from bottom to TOA
         for (int i = NLAY; i>1; i--){
-            Edownsolar_wvl[i-1]=(R[i-2]*t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]+Edir_wvl[i-1]*rdir[i-1]*R[i-2])                                     /(1-R[i-2]*r[i-1]);
-            Eupsolar_wvl[i-1]=(t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]*r[i-1]+Edir_wvl[i-1]*rdir[i-1])                                               /(1-R[i-2]*r[i-1]);
+            Edownsolar_wvl[i-1]=(R[i-2]*t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]+Edir_wvl[i-1]*rdir[i-1]*R[i-2])/(1-R[i-2]*r[i-1]);
+            Eupsolar_wvl[i-1]=(t[i-1]*Eupsolar_wvl[i]+Edir_wvl[0]*Sdir[i-2]*r[i-1]+Edir_wvl[i-1]*rdir[i-1])/(1-R[i-2]*r[i-1]);
         }
         Eupsolar_wvl[0] = t[0]*Eupsolar_wvl[1]; //technically + r[0]*Edownsolar_wvl[0] but second term is set to zero
         
         // Adding up _wvl contributions to the returned irradiances
-        for (int i=0; i<=NLAY; i++){
+        for (int i=0; i<nlev; i++){
             Edir[i] += Edir_wvl[i]*weight_solar[w];
             Eupsolar[i] += Eupsolar_wvl[i]*weight_solar[w];
-            Edownsolar[i] += Edownsolar_wvl[i]*weight_solar[w];
+            Edownsolar[i] += (Edownsolar_wvl[i])*weight_solar[w];
         }
-        return 0;
-    }
+    } // end of wavelength loop
+    
+    for (int i=0; i<nlev; i++){
+    Edownsolar[i] = Edownsolar[i] + Edir[i];
+        }
+    //printf("%8.2f", E0_temp);
+    /*
+        printf("Eupsolar\n");
+        show(Eupsolar);
+        printf("Edownsolar\n");
+        show(Edownsolar);
+        printf("Edir\n"); */
+    exit(0);
+    return 0;
 }
 
 int convection(double *T, double *p)
