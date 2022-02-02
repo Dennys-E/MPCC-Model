@@ -491,10 +491,8 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
     } // end of wavelength loop
     
     for (int i=0; i<nlev; i++){
-        printf("Level %d: Edir %6.3f \t Edownsolar %6.3f \t Eupsolar %6.3f\n", i, Edir[i], Edownsolar[i], Eupsolar[i]);
-       // Edownsolar[i] = Edownsolar[i] + Edir[i];
+        Edownsolar[i] = Edownsolar[i] + Edir[i];
     }
-    exit(0);
     return 0;
 }
 
