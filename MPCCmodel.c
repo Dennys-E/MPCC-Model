@@ -31,12 +31,13 @@ gcc -Wall -o MPCCmodel.exe MPCCmodel.c ascii.o repwvl_thermal.o repwvl_solar.c -
 #define G_RAYLEIGH 0
 #define M_AIR 28.97
 #define U 1.6605e-27
+#define CLOUD_TUNING_PARAM 1 // Gets multiplied with cloud optical thickness
 
 // prototypes
-int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar);
-int thermal_radiative_transfer(double *T, double *Edownthermal, double *Eupthermal, int nlev, int nwvl_thermal, double *wvl_thermal, double *weight_thermal, double **tau_thermal);
+int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar, double *tau_ext_thermal_cloud, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
+int thermal_radiative_transfer(double *T, double *Edownthermal, double *Eupthermal, int nlev, int nwvl_thermal, double *wvl_thermal, double *weight_thermal, double **tau_thermal, double *tau_ext_thermal_cloud, int *cloud_presence);
 int schwarzschild(double *B, double *tau_array, double *Eup, double *Edown, int nlev);
-int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar);
+int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
 int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double dt);
 int convection(double *T, double *p);
 double TtoTheta(double T, double p);
@@ -101,12 +102,13 @@ int main()
     }
     
     
-    // Allocate heap memory
+    // Allocate heap memory?
     plevPa   = calloc (nlev, sizeof(double));
     O2_VMR   = calloc (nlev, sizeof(double));
     N2_VMR   = calloc (nlev, sizeof(double));
     HNO3_VMR = calloc (nlev, sizeof(double));
     CO_VMR   = calloc (nlev, sizeof(double));
+
 
     for (int ilev = 0; ilev < nlev; ilev++)
     {
@@ -152,6 +154,42 @@ int main()
         N2_VMR_lay  [ilay] = (N2_VMR[ilay]   + N2_VMR[ilay+1])/2.0;
     }
     
+    // Read in cloud properties interpolated to 50 repwvl data (thermal as well as solar)
+    double *wvl_thermal_cloud = NULL,  *wvl_solar_cloud=NULL;
+    double *tau_ext_thermal_cloud = NULL,  *tau_ext_solar_cloud=NULL;
+    double *omega0_thermal_cloud = NULL,  *omega0_solar_cloud=NULL;
+    double *g_thermal_cloud = NULL,  *g_solar_cloud=NULL;
+    
+    char cloud_thermal_lookup[FILENAME_MAX] = "./ReducedLookupFile_thermal_50wvls_corrected.mie.delta.cldprp";
+    status = read_4c_file(cloud_thermal_lookup, &wvl_thermal_cloud, &tau_ext_thermal_cloud, &omega0_thermal_cloud, &g_thermal_cloud, &nwvl_thermal);
+    if (status != 0)
+    {
+        fprintf (stderr, "Error %d reading %s\n", status, "cloud thermal lookup file");
+        return status;
+    }
+    if (nlev != NLAY + 1)
+    {
+        printf("Error: number of layers (nlev) from data does not correspond to set NLAY in                   model");
+    }
+    
+    char cloud_solar_lookup[FILENAME_MAX] = "./ReducedLookupFile_solar_50wvls.mie.delta.cldprp";
+    status = read_4c_file(cloud_solar_lookup, &wvl_solar_cloud, &tau_ext_solar_cloud, &omega0_solar_cloud, &g_solar_cloud, &nwvl_thermal);
+    if (status != 0)
+    {
+        fprintf (stderr, "Error %d reading %s\n", status, "cloud solar lookup file");
+        return status;
+    }
+    if (nlev != NLAY + 1)
+    {
+        printf("Error: number of layers (nlev) from data does not correspond to set NLAY in                   model");
+    }
+    
+    // Defining layers at which clouds are present
+    int cloud_presence[NLAY]={0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    for (int i=0; i<NLAY; i++){
+        cloud_presence[i] *= CLOUD_TUNING_PARAM;
+    }
+    
     
     // Dynamic time loop
     double progress = 0.;
@@ -189,7 +227,7 @@ int main()
         } 
 
         // Radiation
-        integrate_radiation(nlev, Tlay, dp, dt, tau_thermal, wvl_thermal, weight_thermal, nwvl_thermal, tau_solar, wvl_solar, weight_solar, E0_solar, nwvl_solar);
+        integrate_radiation(nlev, Tlay, dp, dt, tau_thermal, wvl_thermal, weight_thermal, nwvl_thermal, tau_solar, wvl_solar, weight_solar, E0_solar, nwvl_solar, tau_ext_thermal_cloud, cloud_presence, tau_ext_solar_cloud, omega0_solar_cloud, g_solar_cloud);
 
         // Convection
         convection(Tlay, p);
@@ -249,7 +287,7 @@ int main()
     return 0;
 }
 
-int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar)
+int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar, double *tau_ext_thermal_cloud, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud)
 {
     // Function including radiative integration over wavelength for different molecules and different layers
     // Uses molecule file data for the tau_thermal array, as computed by repwvl
@@ -267,8 +305,8 @@ int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_
     initialize_double_array(Eupthermal, nlev, 0);
 
     // Produce irradiances with the input temperature profile
-    thermal_radiative_transfer(T, Edownthermal, Eupthermal, nlev, nwvl_thermal, wvl_thermal, weight_thermal, tau_thermal);
-    solar_radiative_transfer(dp, Edownsolar, Eupsolar, nlev, nwvl_solar, wvl_solar, weight_solar, E0_solar, tau_solar);
+    thermal_radiative_transfer(T, Edownthermal, Eupthermal, nlev, nwvl_thermal, wvl_thermal, weight_thermal, tau_thermal, tau_ext_thermal_cloud, cloud_presence);
+    solar_radiative_transfer(dp, Edownsolar, Eupsolar, nlev, nwvl_solar, wvl_solar, weight_solar, E0_solar, tau_solar, cloud_presence, tau_ext_solar_cloud, omega0_solar_cloud, g_solar_cloud);
     
     for (int i = 0; i < nlev; i++)
     {
@@ -281,7 +319,7 @@ int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_
     return 0;
 }
 
-int thermal_radiative_transfer(double *T, double *Edownthermal, double *Eupthermal, int nlev, int nwvl_thermal, double *wvl_thermal, double *weight_thermal, double **tau_thermal)
+int thermal_radiative_transfer(double *T, double *Edownthermal, double *Eupthermal, int nlev, int nwvl_thermal, double *wvl_thermal, double *weight_thermal, double **tau_thermal, double *tau_ext_thermal_cloud, int *cloud_presence)
 {
     // Integration over wavelengths with Eup and Edown
     // I: T array, wavelength array
@@ -298,7 +336,7 @@ int thermal_radiative_transfer(double *T, double *Edownthermal, double *Euptherm
 
         for (int i = 0; i < NLAY; i++)
         {
-            tau_array[i] = tau_thermal[w][i];
+            tau_array[i] = tau_thermal[w][i] + tau_ext_thermal_cloud[w]*cloud_presence[i];
             // Compute Planck function depending on the wavelength band (=^= sigma*T^4 and cplkavg function)
             B[i] = Planck(T[i], wvl_thermal[w]) * weight_thermal[w];
         }
@@ -390,7 +428,7 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
     return 0;
 }
 
-int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar)
+int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud)
 {
     // Clear the relevant arrays before each use of the function
     double Edir[nlev], Edir_wvl[nlev];
@@ -403,6 +441,7 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
     
     // Define quantities and tau_Rayleigh[w][i] (even though it does not depend on i --> better compatibility with tau)
     double tau_Rayleigh[nwvl_solar][NLAY];
+    double g[nwvl_solar][NLAY];
     double sigma_to_tau = dp*100/(M_AIR*U*G);
     
     for(int i = 0; i < NLAY; i++){
@@ -411,19 +450,28 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         }
     }
 
-    // This is the point to later define omega0 and tau for clouds. For now we leave them set to zero
-    double tau_cloud[nwvl_solar][NLAY];
+    // Add up tau contributions to tau_tot. This is the point where the imported cloud data is used.
     double tau_tot[nwvl_solar][NLAY];
     double omega0[nwvl_solar][NLAY];
+    
+    double tau_ext_cloud[nwvl_solar][NLAY];
+    double tau_sca_cloud[nwvl_solar][NLAY];
         
     for(int i = 0; i < NLAY; i++){
         for(int w = 0; w < nwvl_solar; w++){
-            tau_cloud[w][i] = 0;
-            tau_tot[w][i] = tau_Rayleigh[w][i]+tau_cloud[w][i]+tau_solar[w][i]; // tau_ext in lecture notes
+            
+            tau_ext_cloud[w][i] = tau_ext_solar_cloud[w]*cloud_presence[i];
+            tau_sca_cloud[w][i] = tau_ext_cloud[w][i]*omega0_solar_cloud[w]/CLOUD_TUNING_PARAM;
+            
+            tau_tot[w][i] = tau_Rayleigh[w][i]+tau_ext_cloud[w][i]+tau_sca_cloud[w][i]+tau_solar[w][i]; // tau_cloud = tau_ext_cloud/(1-omega0_cloud)
             if(tau_tot[w][i] > 100){
                 tau_tot[w][i] = 100.;
             }
-            omega0[w][i] = tau_Rayleigh[w][i]/tau_tot[w][i]; //here a cloud scattering tau would have to be added in the enumerator
+            
+            g[w][i] = (tau_Rayleigh[w][i]*G_RAYLEIGH + tau_sca_cloud[w][i]*g_solar_cloud[w])/(tau_Rayleigh[w][i] + tau_sca_cloud[w][i]);
+                       
+            omega0[w][i] = (tau_Rayleigh[w][i] + tau_sca_cloud[w][i])/(tau_ext_cloud[w][i] + tau_solar[w][i]);
+                //version before clouds: tau_Rayleigh[w][i]/tau_tot[w][i];
         }
     }
     
@@ -431,14 +479,13 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
     // Since no clouds are introduced yet, g is set to zero.
     double t[NLAY], r[NLAY], rdir[NLAY], sdir[NLAY], tdir[NLAY];
     double R[NLAY], T[NLAY], Sdir[NLAY], Tdir[NLAY];
-    
-    double g = G_RAYLEIGH; //asymmetry parameter
+
     double mu0 = 0.5; // 60 degree solar zenith angle
 
     for(int w = 0; w < nwvl_solar; w++){
         for(int i = 0; i < NLAY; i++){
             // This loop over wavelengths will be relevant for a while. E.g. all quantites with the suffix _wvl are relevant for one wavelength and will be added in the end of the loop.
-            eddington_v2 (tau_tot[w][i], g, omega0[w][i], mu0, &t[i],
+            eddington_v2 (tau_tot[w][i], g[w][i], omega0[w][i], mu0, &t[i],
                           &r[i], &rdir[i], &sdir[i], &tdir[i]);
         }
         
