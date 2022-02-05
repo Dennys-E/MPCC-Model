@@ -31,7 +31,7 @@ gcc -Wall -o MPCCmodel.exe MPCCmodel.c ascii.o repwvl_thermal.o repwvl_solar.c -
 #define G_RAYLEIGH 0
 #define M_AIR 28.97
 #define U 1.6605e-27
-#define CLOUD_TUNING_PARAM 1.3 // Gets multiplied with cloud optical thickness tau_ext_cloud // Manuel has set to 1.3
+#define CLOUD_TUNING_PARAM 1.135 // Gets multiplied with cloud optical thickness tau_ext_cloud
 
 // prototypes
 int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar, double *tau_abs_thermal_cloud, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
@@ -90,7 +90,7 @@ int main()
     
     // Read atmospheric profile from test.atm (defined at levels)
     char testfile[FILENAME_MAX] = "./test.atm";
-    status = read_9c_file(testfile, &zlev, &plev, &Tlev, &rhodata, &H2O_VMR, &O3_VMR,             &CO2_VMR, &CH4_VMR, &N2O_VMR, &nlev);
+    status = read_9c_file(testfile, &zlev, &plev, &Tlev, &rhodata, &H2O_VMR, &O3_VMR, &CO2_VMR, &CH4_VMR, &N2O_VMR, &nlev);
     if (status != 0)
     {
         fprintf (stderr, "Error %d reading %s\n", status, "test.atm");
@@ -102,13 +102,12 @@ int main()
     }
     
     
-    // Allocate heap memory?
+    // Allocate heap memory
     plevPa   = calloc (nlev, sizeof(double));
     O2_VMR   = calloc (nlev, sizeof(double));
     N2_VMR   = calloc (nlev, sizeof(double));
     HNO3_VMR = calloc (nlev, sizeof(double));
     CO_VMR   = calloc (nlev, sizeof(double));
-
 
     for (int ilev = 0; ilev < nlev; ilev++)
     {
@@ -154,6 +153,7 @@ int main()
         N2_VMR_lay  [ilay] = (N2_VMR[ilay]   + N2_VMR[ilay+1])/2.0;
     }
     
+    
     // Read in cloud properties interpolated to 50 repwvl data (thermal as well as solar)
     double *tau_ext_thermal_cloud = NULL,  *tau_ext_solar_cloud = NULL;
     double *omega0_thermal_cloud = NULL,  *omega0_solar_cloud = NULL;
@@ -183,18 +183,29 @@ int main()
         printf("Error: number of layers (nlev) from data does not correspond to set NLAY in model");
     }
     
+    
+    //printf("Cloud tuning parameter: %f \n", CLOUD_TUNING_PARAM);
+    //printf("Cloud presence: ");
+
     // Defining layers at which clouds are present and tuning the cloud optical thicknesses
-    int cloud_presence[NLAY] = {0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int cloud_presence[NLAY] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0};
     int n_cloud_lyr = 0;
     for (int i = 0; i < NLAY; i++)
+    {
         n_cloud_lyr += cloud_presence[i];
+        //printf("%d ", cloud_presence[i]);
+    }
+    //printf("\n");
 
     double tau_abs_thermal_cloud[nwvl_thermal];
     for (int w = 0; w < nwvl_thermal; w++) // nwvl_thermal and nwvl_solar are both 50
     {
-        tau_ext_thermal_cloud[w] *= CLOUD_TUNING_PARAM/n_cloud_lyr;
-        tau_ext_solar_cloud[w] *= CLOUD_TUNING_PARAM/n_cloud_lyr;
-        tau_abs_thermal_cloud[w] = tau_ext_thermal_cloud[w] * (1-omega0_thermal_cloud[w]);
+        tau_abs_thermal_cloud[w] = 0;
+        if (n_cloud_lyr > 0){
+            tau_ext_thermal_cloud[w] *= CLOUD_TUNING_PARAM/n_cloud_lyr;
+            tau_ext_solar_cloud[w] *= CLOUD_TUNING_PARAM/n_cloud_lyr;
+            tau_abs_thermal_cloud[w] = tau_ext_thermal_cloud[w] * (1-omega0_thermal_cloud[w]);
+        }
     }
 
     
@@ -207,11 +218,11 @@ int main()
     double dt_max = 60*60*6; // maximum time step (6 hours)
     double dt_min = 60*60;
     double t_temp = 0;
+    double e_w[NLAY], e_w_old[NLAY], e_w_factor[NLAY];
     
     fprintf(fptr, "%9.0f \t \t %7.3f \n", t, Tlay[NLAY - 1]); // print initial values
     
-    // Initially retrieving the tau's for thermal and solar:
-    read_tau("./ReducedLookupFile_thermal_50wvls_corrected.nc", nlev, plevPa, Tlev, H2O_VMR, CO2_VMR, O3_VMR, N2O_VMR, CO_VMR, CH4_VMR, O2_VMR, HNO3_VMR, N2_VMR, &tau_thermal, &wvl_thermal, &weight_thermal, &nwvl_thermal, 1); // defined at levels, choose 50 or 100    
+    // Initially retrieving the solar tau
     read_tau_solar("./ReducedLookupFile_solar_50wvls.nc", nlev, plevPa, Tlay,
           H2O_VMR_lay, CO2_VMR_lay, O3_VMR_lay, N2O_VMR_lay, CO_VMR_lay, CH4_VMR_lay, O2_VMR_lay, HNO3_VMR_lay, N2_VMR_lay,
           &tau_solar, &wvl_solar, &weight_solar, &E0_solar, &nwvl_solar, 0); // defined at layers
@@ -219,13 +230,19 @@ int main()
     while (t <= SIMTIME)
     {
         // Retrieving the tau's for thermal and solar:
-        read_tau("./ReducedLookupFile_thermal_50wvls_corrected.nc", nlev, plevPa, Tlev, H2O_VMR, CO2_VMR, O3_VMR, N2O_VMR, CO_VMR, CH4_VMR, O2_VMR, HNO3_VMR, N2_VMR, &tau_thermal, &wvl_thermal, &weight_thermal, &nwvl_thermal, 1); // defined at levels, choose 50 or 100     
+        read_tau("./ReducedLookupFile_thermal_50wvls_corrected.nc", nlev, plevPa, Tlay, H2O_VMR_lay, CO2_VMR_lay, O3_VMR_lay, N2O_VMR_lay, CO_VMR_lay, CH4_VMR_lay, O2_VMR_lay, HNO3_VMR_lay, N2_VMR_lay, &tau_thermal, &wvl_thermal, &weight_thermal, &nwvl_thermal, 0); // defined at layers  
         if (t_temp>=60*60*5*24)
         {
             read_tau_solar("./ReducedLookupFile_solar_50wvls.nc", nlev, plevPa, Tlay, H2O_VMR_lay, CO2_VMR_lay, O3_VMR_lay, N2O_VMR_lay, CO_VMR_lay, CH4_VMR_lay, O2_VMR_lay, HNO3_VMR_lay, N2_VMR_lay, &tau_solar, &wvl_solar, &weight_solar, &E0_solar, &nwvl_solar, 0); // defined at layers
             t_temp = 0;
         }
         
+        // Calculate vapor pressure/partial pressure of H2O
+        for (int i = 0; i < NLAY; i++)
+            if (t == 0.0) // initial timestep
+                e_w_old[i] = 6.1094*exp(17.625*(Tlay[i]-273.15)/(Tlay[i]-273.15+243)); // hPa
+            else
+                e_w_old[i] = e_w[i];
         
         // Save each initial temperature array for (real) dT calculation later
         for (int i = 0; i < NLAY; i++)
@@ -239,10 +256,13 @@ int main()
         // Convection
         convection(Tlay, p);
 
-        // Calculate the change in temperature per layer for the timestep
+        // Calculate the change in temperature per layer for the timestep and include the water vapor feedback
         for (int i = 0; i < NLAY; i++)
         {
             dTlay[i] = Tlay[i] - oldTlay[i];
+            e_w[i] =  6.1094*exp(17.625*(Tlay[i]-273.15)/(Tlay[i]-273.15+243)); // hPa
+            e_w_factor[i] = e_w[i]/e_w_old[i];
+            //H2O_VMR_lay[i] *= e_w_factor[i];         
         }
 
         // Calculation of dt for the dynamic timestepping
@@ -320,9 +340,14 @@ int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_
         Edowntot[i] = Edownthermal[i] + Edownsolar[i];
         Euptot[i] = Eupthermal[i] + Eupsolar[i];
     }
+    //double E_TOA_net_down = Edowntot[0] - Euptot[0];
+    //printf("E_TOA_net_down: %6.2f\n", E_TOA_net_down);
+    
+    //exit(0);
     
     // New temperature array from irradiances
     irradiancetoT(Edowntot, Euptot, T, dp, dt);
+    
     return 0;
 }
 
@@ -358,6 +383,17 @@ int thermal_radiative_transfer(double *T, double *Edownthermal, double *Euptherm
             Edownthermal[i] += Edown[i];
         }
     }
+    /*printf("\n");
+    for (int i = 0; i < nlev; i++)
+        if (i < 1)
+            printf("Level %d: Edownthermal %6.2f \t Eupthermal %6.2f \n", i, Edownthermal[i], Eupthermal[i]);
+        else if (i > 19){
+            printf("Level %d: Edownthermal %6.2f \t Eupthermal %6.2f \n", i, Edownthermal[i], Eupthermal[i]);
+        }
+    printf("\n");*/
+    
+
+    
     return 0;
 }
 
@@ -415,7 +451,6 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
     // O: T array, dT array (--> for dynamic timestepping)
 
     double Enet[NLAY], dTrad[NLAY];
-
     for (int i = 0; i < NLAY; i++)
     {
         // Net Earth surface layer irradiance downwards put into the first atmospheric layer
@@ -431,7 +466,8 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
         // Irradiance to temperature change
         dTrad[i] = G * Enet[i] * dt / (CP * dp * 100);
         T[i] += dTrad[i];
-    }
+    }        
+
     return 0;
 }
 
@@ -538,15 +574,22 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
             Edownsolar[i] += (Edownsolar_wvl[i])*weight_solar[w];
         }
     } // end of wavelength loop
-    /*for (int i =0; i<nlev; i++)
-        printf("Edir %6.2f \t Edownsolar %6.2f \t Eupsolar %6.2f \n", Edir[i], Edownsolar[i], Eupsolar[i]);
-    
-    exit(0);
-    */
+
     for (int i=0; i<nlev; i++){
         Edownsolar[i] = Edownsolar[i] + Edir[i];
     }
     
+    /*for (int i = 0; i < nlev; i++)
+        if (i < 1)
+            printf("Level %d: Edownsolar %6.2f \t Eupsolar %6.2f \n", i, Edownsolar[i], Eupsolar[i]);
+        else if (i > 19){
+            printf("Level %d: Edownsolar %6.2f \t Eupsolar %6.2f \n", i, Edownsolar[i], Eupsolar[i]);
+        }
+    //printf("\n");
+        
+    //for (int i = 0; i<nlev; i++)
+      //  printf("Level %d: Edownsolar %6.2f \t Eupsolar %6.2f \n", i, Edownsolar[i], Eupsolar[i]);*/
+      
     return 0;
 }
 
