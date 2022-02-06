@@ -37,7 +37,7 @@ gcc -Wall -o MPCCmodel.exe MPCCmodel.c ascii.o repwvl_thermal.o repwvl_solar.c -
 int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar, double *tau_abs_thermal_cloud, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
 int thermal_radiative_transfer(double *T, double *Edownthermal, double *Eupthermal, int nlev, int nwvl_thermal, double *wvl_thermal, double *weight_thermal, double **tau_thermal, double *tau_abs_thermal_cloud, int *cloud_presence);
 int schwarzschild(double *B, double *tau_abs, double *Eup, double *Edown, int nlev);
-int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
+int solar_radiative_transfer(double *T, double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
 int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double dt);
 int convection(double *T, double *p);
 double TtoTheta(double T, double p);
@@ -333,7 +333,7 @@ int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_
 
     // Produce irradiances with the input temperature profile
     thermal_radiative_transfer(T, Edownthermal, Eupthermal, nlev, nwvl_thermal, wvl_thermal, weight_thermal, tau_thermal, tau_abs_thermal_cloud, cloud_presence);
-    solar_radiative_transfer(dp, Edownsolar, Eupsolar, nlev, nwvl_solar, wvl_solar, weight_solar, E0_solar, tau_solar, cloud_presence, tau_ext_solar_cloud, omega0_solar_cloud, g_solar_cloud);
+    solar_radiative_transfer(T, dp, Edownsolar, Eupsolar, nlev, nwvl_solar, wvl_solar, weight_solar, E0_solar, tau_solar, cloud_presence, tau_ext_solar_cloud, omega0_solar_cloud, g_solar_cloud);
     
     for (int i = 0; i < nlev; i++)
     {
@@ -471,7 +471,7 @@ int irradiancetoT(double *Edowntot, double *Euptot, double *T, double dp, double
     return 0;
 }
 
-int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud)
+int solar_radiative_transfer(double *T, double dp, double *Edownsolar, double *Eupsolar, int nlev, int nwvl_solar, double *wvl_solar, double *weight_solar, double *E0_solar, double **tau_solar, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud)
 {
     // Clear the relevant arrays before each use of the function
     double Edir[nlev], Edir_wvl[nlev];
@@ -516,7 +516,7 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
     
     // In order to compute the eddington function for the adding routine, all necessary layer quantites have to be defined
     double t[NLAY], r[NLAY], rdir[NLAY], sdir[NLAY], tdir[NLAY];
-    double R[NLAY], T[NLAY], Sdir[NLAY], Tdir[NLAY];
+    double R[NLAY], Tr[NLAY], Sdir[NLAY], Tdir[NLAY];
 
     double mu0 = 0.5; // 60 degree solar zenith angle
 
@@ -530,15 +530,15 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         // Define boundary conditions and "initial values"
         Edir_wvl[0] = E0_solar[w]*mu0/2.; 
         R[0] = r[0]; 
-        T[0] = t[0];  
+        Tr[0] = t[0];  
         Tdir[0] = tdir[0]; 
         Sdir[0] = sdir[0]; 
         
-        // Compute R, T and Tdir
+        // Compute R, Tr (Tr instead of T in order to avoid confusion with temperature T) and Tdir
         for (int i = 0; i < NLAY-1; i++)
         {
             R[i+1] = r[i+1] + R[i]*t[i+1]*t[i+1]/(1-R[i]*r[i+1]); 
-            T[i+1] = T[i]*t[i+1]/(1-R[i]*r[i+1]); 
+            Tr[i+1] = Tr[i]*t[i+1]/(1-R[i]*r[i+1]); 
             Tdir[i+1] = Tdir[i] * tdir[i+1]; 
         }
         
@@ -553,7 +553,12 @@ int solar_radiative_transfer(double dp, double *Edownsolar, double *Eupsolar, in
         }
         
         // Define surface albedo Ag and boundary conditions for Eupsolar and Edownsolar in current wavelength
-        double Ag = 0.12;
+        
+        double T_arctic = 2.*T[NLAY-1] - 312.2;
+        double Ag_arctic = 0.8 - 0.038*T_arctic;
+        
+        double Ag = 0.12 + 0.013*(Ag_arctic - 0.8);
+        
         double Edownsolar_wvl[nlev], Eupsolar_wvl[nlev];
         
         Edownsolar_wvl[0] = 0.;
