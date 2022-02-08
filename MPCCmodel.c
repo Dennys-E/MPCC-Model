@@ -31,7 +31,7 @@ gcc -Wall -o MPCCmodel.exe MPCCmodel.c ascii.o repwvl_thermal.o repwvl_solar.c -
 #define G_RAYLEIGH 0
 #define M_AIR 28.97
 #define U 1.6605e-27
-#define CLOUD_TUNING_PARAM 1.135 // Gets multiplied with cloud optical thickness tau_ext_cloud
+#define CLOUD_TUNING_PARAM 1.135 // 1.192 Gets multiplied with cloud optical thickness tau_ext_cloud
 
 // prototypes
 int integrate_radiation(int nlev, double *T, double dp, double dt, double **tau_thermal, double *wvl_thermal, double *weight_thermal, int nwvl_thermal, double **tau_solar, double *wvl_solar, double *weight_solar, double *E0_solar, int nwvl_solar, double *tau_abs_thermal_cloud, int *cloud_presence, double *tau_ext_solar_cloud, double *omega0_solar_cloud, double *g_solar_cloud);
@@ -60,9 +60,10 @@ int main()
     start = clock();
 
     // Creating a file to output surface T into
-    FILE *fptr;
+    /*FILE *fptr;
     fptr = fopen("output_surfaceT_MPCCmodel.dat", "w");
     fprintf(fptr, "time (hours) \t \t \t T_surf \n");
+    */
 
     
     // Allocation and initialization
@@ -111,10 +112,12 @@ int main()
 
     for (int ilev = 0; ilev < nlev; ilev++)
     {
+        //CO2_VMR [ilev] = 280;
+        //CH4_VMR[ilev] = 0.6;
         // Convert ppm values to fractions
         H2O_VMR [ilev] *= 1E-6;
         O3_VMR  [ilev] *= 1E-6;
-        CO2_VMR [ilev] *= 1E-6;
+        CO2_VMR [ilev] *= 1E-6; // double CO2
         CH4_VMR [ilev] *= 1E-6;
         N2O_VMR [ilev] *= 1E-6;
     
@@ -126,6 +129,8 @@ int main()
         
         // Converting pressure to hPa
         plevPa[ilev] = plev[ilev] * 100.0;
+        
+        printf("Level %d: Tlev %6.2f CO2_VMR %f CH4_VMR %f \n", ilev, Tlev[ilev], CO2_VMR[ilev], CH4_VMR[ilev]);
     } 
     
     // Set up for solar radiative effects (quantities defined at layers)
@@ -195,6 +200,10 @@ int main()
         n_cloud_lyr += cloud_presence[i];
         //printf("%d ", cloud_presence[i]);
     }
+    //cloud_presence[17] *= 1.05;// lowest clouds: at about 1 km
+    //printf("Cloud presence:");
+    //show(cloud_presence);
+    //exit(0);
     //printf("\n");
 
     double tau_abs_thermal_cloud[nwvl_thermal];
@@ -220,7 +229,7 @@ int main()
     double t_temp = 0;
     double e_w[NLAY], e_w_old[NLAY], e_w_factor[NLAY];
     
-    fprintf(fptr, "%9.0f \t \t %7.3f \n", t, Tlay[NLAY - 1]); // print initial values
+    //fprintf(fptr, "%9.0f \t \t %7.3f \n", t, Tlay[NLAY - 1]); // print initial values
     
     // Initially retrieving the solar tau
     read_tau_solar("./ReducedLookupFile_solar_50wvls.nc", nlev, plevPa, Tlay,
@@ -262,7 +271,7 @@ int main()
             dTlay[i] = Tlay[i] - oldTlay[i];
             e_w[i] =  6.1094*exp(17.625*(Tlay[i]-273.15)/(Tlay[i]-273.15+243)); // hPa
             e_w_factor[i] = e_w[i]/e_w_old[i];
-            //H2O_VMR_lay[i] *= e_w_factor[i];         
+            H2O_VMR_lay[i] *= e_w_factor[i];         
         }
 
         // Calculation of dt for the dynamic timestepping
@@ -278,7 +287,7 @@ int main()
         t_temp += dt;
 
         // Print into data file
-        fprintf(fptr, "%9.0f \t \t %7.3f \n", t / 3600, Tlay[NLAY - 1]);
+        //fprintf(fptr, "%9.0f \t \t %7.3f \n", t / 3600, Tlay[NLAY - 1]);
 
         // Condition to end run early (needs readjustment I guess)
         if (absdT_max < 0.0001)
@@ -292,10 +301,10 @@ int main()
         printf("Running the time loop... %3.2f  |  dt = %3.2f seconds  |  t = %3.2f days  |  Tsurface = %3.2f K \r", progress, dt, t / 86400, Tlay[NLAY - 1]);
         fflush(stdout);
     }
-    fclose(fptr);
+    //fclose(fptr);
 
     // Write file with the final layer-temperature structure
-    FILE *fptr2 = fopen("output_Tstructure_MPCCmodel.dat", "w");
+    FILE *fptr2 = fopen("output_Tstructure_MPCCmodel_clouds1.192_2CO2_vapor_alf.dat", "w");
     fprintf(fptr2, "Final time = %5.0f hours, T (R) in different layers (L):\n", t / 3600);
     for (int i = 0; i < NLAY; i++)
     {
@@ -552,12 +561,23 @@ int solar_radiative_transfer(double *T, double dp, double *Edownsolar, double *E
             Sdir[i+1] = (t[i+1]*Sdir[i]+Tdir[i]*rdir[i+1]*R[i]*t[i+1])/(1-R[i]*r[i+1])+Tdir[i]*sdir[i+1]; 
         }
         
-        // Define surface albedo Ag and boundary conditions for Eupsolar and Edownsolar in current wavelength
         
-        double T_arctic = 2.*T[NLAY-1] - 312.2;
-        double Ag_arctic = 0.8 - 0.038*T_arctic;
+        // Albedo calc
+        double T_ice = 258;
+        double T_no_ice = 293;
+        double albedo_ice = 0.7;
+        double albedo_no_ice = 0.1;
+    
+        double Ag = 0.12;
         
-        double Ag = 0.12 + 0.013*(Ag_arctic - 0.8);
+        if (T[NLAY-1] > T_no_ice)
+            Ag = albedo_no_ice;
+        else if (T[NLAY-1] < T_ice)
+            Ag = albedo_ice;
+        else {
+            double x = 1 + (T[NLAY-1] - T_no_ice)/(T_no_ice - T_ice);
+            Ag = albedo_ice + (albedo_no_ice - albedo_ice)*((1+0.477/2*x - 0.477/2*pow(x,3)));
+        }
         
         double Edownsolar_wvl[nlev], Eupsolar_wvl[nlev];
         
